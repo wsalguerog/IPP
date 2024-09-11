@@ -1,0 +1,103 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+```{r}
+library("readxl")
+library("tidyverse")
+require("tidyverse")
+library("writexl")
+library("tibble")
+library("openxlsx")
+library("DBI")
+library("odbc")
+library("RSQLite")
+library("psych")
+library("pracma")
+library("bit64")
+library('glue')
+library('RMySQL')
+library('stringi')
+library('rlang')
+
+source("func_test.R")
+```
+
+```{r}
+mes <- 1
+
+variables <- inputdata(mes)
+
+mes <- variables$mes
+mesant <- variables$mes_ant
+
+mes
+mesant
+```
+
+```{r}
+ponderaciones <- read_excel("catalogoIPP_test.xlsx", sheet = "Sheet1") %>% 
+  mutate(VARIEDAD = gsub("\\.", "", VARIEDAD)) %>% 
+  rename(PRODUCTO = VARIEDAD, ponderacion = `Ponderacion 5 Digitos`) %>% 
+  mutate(
+    ACTIVIDAD = substr(PRODUCTO, 1, 6),
+    CLASE = substr(PRODUCTO, 1, 5),
+    GRUPO = substr(PRODUCTO, 1, 4),
+    GRUPO = substr(PRODUCTO, 1, 4),
+    DIVISION = substr(PRODUCTO, 1, 3),
+    SECCION = substr(PRODUCTO, 1, 1))
+```
+
+```{r}
+#se importan los indices anteriores
+file_name <- paste0("ind_", mesant, ".xlsx")
+indant <- read_excel(file_name, sheet = "Sheet1") %>% 
+  mutate(PRODUCTO = gsub("\\.", "", PRODUCTO))
+```
+
+```{r}
+#se importan los precios actuales
+precios <- read_excel("precios1_test.xlsx", sheet = "Sheet1") %>% 
+  mutate(ACTIVIDAD = gsub("\\.", "", ACTIVIDAD),
+         PRODUCTO = gsub("\\.", "", PRODUCTO),
+         VARIEDAD = gsub("\\.", "", VARIEDAD))
+
+bol <- precios %>% 
+  select(PRODUCTO, VARIEDAD, all_of(mes), all_of(mesant)) %>% 
+  filter(!!sym(mes) != 0) #se quitan los datos que en el mes actual son cero para imputarlos
+```
+
+```{r}
+#se hace la imputacion de datos
+boleta <- imputacion()
+```
+
+```{r}
+relativo_var <- boleta %>% 
+  mutate(rel_var = !!sym(mes) / !!sym(mesant)) %>% 
+  mutate(rel_var = if_else(is.infinite(rel_var) | is.nan(rel_var) | is.na(rel_var), 1, rel_var)) %>%
+  drop_na(PRODUCTO)
+```
+
+```{r}
+ind_var <- relativo_var %>% group_by(PRODUCTO) %>% 
+  summarize(rel_prod = geometric.mean(rel_var))
+```
+
+```{r}
+ind_prod <- ind_var %>% left_join(indant %>% select(PRODUCTO, indice), by = join_by(PRODUCTO)) %>% 
+  rename(indant = indice) %>% 
+  mutate(indice = indant*rel_prod)
+
+ind_prod01 <- ind_prod %>% 
+  select(PRODUCTO, indice)
+```
+
+```{r}
+calc_indx(ACTIVIDAD)
+calc_indx(CLASE)
+calc_indx(GRUPO)
+calc_indx(DIVISION)
+calc_indx(SECCION) #este seria el indice general
+```

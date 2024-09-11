@@ -1,0 +1,182 @@
+------------------------------------------------------------------------
+
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+```{r}
+library("readxl")
+library("tidyverse")
+require("tidyverse")
+library("writexl")
+library("tibble")
+library("openxlsx")
+library("DBI")
+library("odbc")
+library("RSQLite")
+library("psych")
+library("pracma")
+library("bit64")
+library('glue')
+library('RMySQL')
+library('stringi')
+library('rlang')
+library('ggplot2')
+
+source("func_test.R")
+```
+
+```{r}
+mes <- 7
+```
+
+```{r}
+variables <- inputdata(mes)
+
+mes <- variables$mes
+mesant <- variables$mes_ant
+months <- variables$months
+rows <- variables$rows
+
+mes
+mesant
+months
+rows
+```
+
+```{r}
+ponderaciones <- read_excel("catalogoIPP_test.xlsx", sheet = "Sheet2") %>% 
+  mutate(VARIEDAD = gsub("\\.", "", VARIEDAD)) %>% 
+  rename(PRODUCTO = VARIEDAD, ponderacion = `Ponderacion 5 Digitos`) %>% 
+  mutate(
+    ACTIVIDAD = substr(PRODUCTO, 1, 6),
+    CLASE = substr(PRODUCTO, 1, 5),
+    GRUPO = substr(PRODUCTO, 1, 4),
+    GRUPO = substr(PRODUCTO, 1, 4),
+    DIVISION = substr(PRODUCTO, 1, 3),
+    SECCION = substr(PRODUCTO, 1, 1))
+```
+
+```{r}
+#se importan los indices anteriores
+file_name <- paste0("ind_", mesant, ".xlsx")
+indant <- read_excel(file_name, sheet = "Sheet1") %>% 
+  mutate(PRODUCTO = gsub("\\.", "", PRODUCTO))
+```
+
+```{r}
+#se importan los precios actuales
+precios <- read_excel("precios_test.xlsx", sheet = "Sheet1") %>% 
+  mutate(ACTIVIDAD = gsub("\\.", "", ACTIVIDAD),
+         PRODUCTO = gsub("\\.", "", PRODUCTO),
+         VARIEDAD = gsub("\\.", "", VARIEDAD))
+
+bol <- precios %>% 
+  select(PRODUCTO, VARIEDAD, all_of(mes), all_of(mesant)) %>% 
+  filter(!!sym(mes) != 0) #se quitan los datos que en el mes actual son cero para imputarlos
+```
+
+```{r}
+#se hace la imputacion de datos
+boleta <- imputacion()
+```
+
+```{r}
+relativo_var <- boleta %>% 
+  mutate(rel_var = !!sym(mes) / !!sym(mesant)) %>% 
+  mutate(rel_var = if_else(is.infinite(rel_var) | is.nan(rel_var) | is.na(rel_var) | rel_var > 2 | rel_var == 0, 1, rel_var)) %>%
+  drop_na(PRODUCTO)
+```
+
+```{r}
+ind_var <- relativo_var %>% group_by(PRODUCTO) %>% 
+  summarize(rel_prod = geometric.mean(rel_var))
+```
+
+```{r}
+ind_prod <- ind_var %>% left_join(indant %>% select(PRODUCTO, indice), by = join_by(PRODUCTO)) %>% 
+  rename(indant = indice) %>% 
+  mutate(indice = indant*rel_prod) 
+ind_prod01 <- ind_prod %>% select(PRODUCTO, indice)
+```
+
+```{r}
+ind_act <- calc_indx(ACTIVIDAD)
+ind_clase <- calc_indx(CLASE)
+ind_grupo <- calc_indx(GRUPO)
+ind_div <- calc_indx(DIVISION)
+calc_indx(SECCION) #este seria el indice general
+ind <- calc_indx(SECCION) %>% select(SECCION, indice)
+```
+
+```{r}
+missing <- missing_prices()
+
+imputables <- missing$cann_imput
+no_imputables <- missing$cant_imput
+```
+
+```{r}
+export_index() #Se exportan los resultados a un archivo de excel
+```
+
+Se recolectan los indices generales para poder verlos en un grafico
+
+```{r}
+sheet_names <- paste0(months)
+ipp <- readind(months, sheet_names)
+
+resipp <- do.call(rbind, ipp) %>% rename(Mes = SECCION)
+resipp$Mes <- months[1:nrow(resipp)]
+resipp <- resipp %>%
+  mutate(Mes = factor(Mes, levels = months))
+resipp
+```
+
+```{r}
+grafica(resipp, 'Mes', 'indice')
+```
+
+Se obtienen los articulos de los que no se obtuvo informacion cada mes
+
+```{r}
+resultados <- count_imput()
+
+count_imputables <- resultados$imputados
+count_noimputables <- resultados$noimputados
+```
+
+```{r}
+#con esto se revisan las variedades que no han presentado precios en tres o mas meses 
+test <- count_imputables %>% filter(total >= 3)
+#test
+```
+
+```{r}
+test1 <- count_noimputables %>% filter(total >= 3)
+#test1
+```
+
+```{r}
+# ggplot(test, aes(x = VARIEDAD, y = total)) +
+#   geom_bar(stat = "identity", fill = "skyblue") +
+#   labs(title = "",
+#        x = "Codigo variedad",
+#        y = "Cantidad") +
+#   theme_minimal()+
+#   theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))
+```
+
+```{r}
+wb <- createWorkbook()
+ 
+addWorksheet(wb, "imputables")
+writeData(wb, "imputables", count_imputables)
+
+addWorksheet(wb, "no_imputables")
+writeData(wb, "no_imputables", count_noimputables)
+ 
+file_name <- paste0("resumen_preciosfaltantes.xlsx")
+saveWorkbook(wb, file_name, overwrite = TRUE)
+```
